@@ -1,0 +1,6 @@
+pandas 
+yfinance 
+google-cloud-bigquery 
+python-decouple 
+stockstats 
+numpy
