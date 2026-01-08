@@ -1,41 +1,40 @@
-# main.py
-import logging
-import pandas as pd
-from config import TICKER_SYMBOL, START_DATE, END_DATE
-from data_downloader import download_stock_data
-from feature_engineering import create_lag_features, calculate_rolling_statistics
-from tech_indicators import add_technical_indicators
-from bigquery_uploader import upload_to_bigquery
+from events_generator import FreemiumEventGenerator
+from funnel_metrics import FunnelMetricsCalculator
+from feature_engineering import KPIsFeatureEngineer
+from bigquery_uploader import BigQueryUploader
+from config import SIMULATION_DAYS, DAILY_NEW_USERS
 
-def main():
-    try:
-        # Download stock data
-        stock_data = download_stock_data(TICKER_SYMBOL, START_DATE, END_DATE)
-        if stock_data.empty:
-            logging.warning("No stock data available.")
-            return
+def run_pipeline():
+    print("🚀 Starting Freemium Funnel Analytics Pipeline...")
 
-        # Ensure 'date' is in datetime format
-        stock_data['date'] = pd.to_datetime(stock_data['date'])
+    # 1. Ingest / Generate Raw Data
+    generator = FreemiumEventGenerator(days=SIMULATION_DAYS, daily_users=DAILY_NEW_USERS)
+    raw_events_df = generator.generate_events()
 
-        # Apply feature engineering
-        feature_data = create_lag_features(stock_data.copy(), 'close', lag_days=5)
-        feature_data = calculate_rolling_statistics(feature_data, 'close', window=10)
-        feature_data = create_lag_features(feature_data, 'volume', lag_days=5)
-        feature_data = calculate_rolling_statistics(feature_data, 'volume', window=10)
-        feature_data['day_of_week'] = feature_data['date'].dt.dayofweek
-        feature_data['month'] = feature_data['date'].dt.month
-        feature_data['year'] = feature_data['date'].dt.year
+    # 2. Compute Business Metrics (The "Transformation" Layer)
+    metrics_calc = FunnelMetricsCalculator(raw_events_df)
+    
+    # A) Daily Funnel & Unit Economics
+    daily_econ_df = metrics_calc.compute_unit_economics()
+    
+    # B) Cohort Retention
+    cohort_df = metrics_calc.compute_cohort_retention()
 
-        if feature_data['close'].isna().any():
-            logging.error("The 'close' column contains NaN or missing values.")
-        else:
-            feature_data['daily_return'] = feature_data['close'].pct_change()
-            indicator_data = add_technical_indicators(feature_data.copy())
-            upload_to_bigquery(feature_data, f'{TICKER_SYMBOL}_feature_data')
-            upload_to_bigquery(indicator_data, f'{TICKER_SYMBOL}_technical_indicators')
-    except Exception as e:
-        logging.error(f"An unexpected error occurred: {e}")
+    # 3. Feature Engineering (Smoothing & Trend Detection)
+    # Applying this to the daily aggregation table
+    feature_eng = KPIsFeatureEngineer(daily_econ_df)
+    enriched_daily_df = feature_eng.add_rolling_trends()
+
+    # 4. Warehouse Loading (Enablement Layer)
+    uploader = BigQueryUploader()
+    uploader.create_dataset_if_not_exists()
+
+    # Upload Tables
+    uploader.upload_dataframe(raw_events_df, "raw_events")
+    uploader.upload_dataframe(enriched_daily_df, "mart_daily_funnel_metrics")
+    uploader.upload_dataframe(cohort_df, "mart_cohort_retention") # Note: Pivot tables might need melting for BQ, but GBQ handles cols fine usually
+
+    print("🎉 Pipeline Run Complete. Data ready for dashboarding.")
 
 if __name__ == "__main__":
-    main()
+    run_pipeline()
