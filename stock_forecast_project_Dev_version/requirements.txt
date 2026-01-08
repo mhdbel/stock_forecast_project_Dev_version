@@ -1,6 +1,6 @@
-pandas 
-yfinance 
-google-cloud-bigquery 
-python-decouple 
-stockstats 
+pandas
 numpy
+google-cloud-bigquery
+pandas-gbq
+faker
+db-dtypes
